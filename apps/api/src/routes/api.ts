@@ -1,16 +1,16 @@
-
 import { Router, Request, Response } from 'express';
 import { getMetrics } from '../services/metrics';
 import { isDbConnected } from '../config/db';
-  closeIgClient,
-  scrapeFollowersHandler,
-  getIgClientsSnapshot,
-  closeIgClient,
-} from '../client/Instagram';
-import { logAction, getActionSummary, listActionLogs, getUnifiedActionLog } from '../services/actionLog';
-import { requireAuth } from '../middleware/auth';
-import { signToken } from '../secret';
+import { getUnifiedActionLog } from '../services/actionLog';
+import { authenticate } from '../middleware/auth';
 
+const router = Router();
+  getIgClientsSnapshot,
+} from '../client/Instagram';
+import {
+  getPosterClient,
+  schedulePhotoPost,
+  cancelScheduledPost,
   listScheduledPosts,
 } from '../client/InstagramPoster';
 import {
@@ -65,10 +65,30 @@ router.use((req: Request, _res: Response, next: NextFunction) => {
   next();
 });
 
-// Apply general rate limiter to all API routes
-router.use(generalLimiter);
+  res.json({ ok: true, dbConnected: isDbConnected(), igClient: getIgClientStatus(), geminiKeys: process.env.GEMINI_API_KEY ? 1 : 0 });
+});
 
-// API Documentation endpoint - lists all available endpoints
+router.get('/actions/unified', authenticate, async (req: Request, res: Response) => {
+  const limitParam = req.query.limit as string | undefined;
+  const offsetParam = req.query.offset as string | undefined;
+
+  const limit = limitParam !== undefined ? parseInt(limitParam, 10) : 10;
+  const offset = offsetParam !== undefined ? parseInt(offsetParam, 10) : 0;
+
+  if (Number.isNaN(limit) || Number.isNaN(offset) || limit < 1 || offset < 0) {
+    res.status(400).json({ error: 'Invalid limit or offset' });
+    return;
+  }
+
+  try {
+    const result = await getUnifiedActionLog({ limit, offset });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch unified action log' });
+  }
+});
+
+export default router;
 const apiEndpoints = [
   // Public endpoints
   {
@@ -87,25 +107,12 @@ const apiEndpoints = [
     method: 'GET',
     path: '/api/config',
     auth: false,
-  res.json(logs);
-});
-
-router.get('/actions/unified', async (req: Request, res: Response) => {
-  const limit = Math.min(parseInt(req.query.limit as string, 10) || 10, 100);
-  const offset = parseInt(req.query.offset as string, 10) || 0;
-
-  try {
-    const result = await getUnifiedActionLog({ limit, offset });
-    res.json(result);
-  } catch (err) {
-    console.error('Failed to fetch unified action log:', err);
-    res.status(500).json({ error: 'Failed to fetch unified action log' });
-  }
-});
-
-router.post('/actions', async (req: Request, res: Response) => {
-  const { platform, action, status, metadata } = req.body;
-  await logAction({ platform, action, status, metadata });
+    description: 'Runtime config (detailed when authenticated)',
+  },
+  { method: 'GET', path: '/api/status', auth: false, description: 'Get system status' },
+  {
+    method: 'GET',
+    path: '/api/health',
     auth: false,
     description: 'Health check (detailed when authenticated)',
   },
