@@ -1,15 +1,16 @@
-import express, { Request, Response, NextFunction } from 'express';
-import {
-  getIgClient,
-  closeIgClient,
-import { getIgClient, closeIgClient, getIgClientStatus, getIgClientsSnapshot } from '../client/Instagram';
-import { getAccount, getAccountsMap } from '../config/accounts';
-import { getMetrics } from '../services/metrics';
-import { logAction, getActionSummary, listActionLogs, getUnifiedActionLog } from '../services/actionLog';
-import { isDbConnected } from '../config/db';
-import { signToken, verifyToken } from '../secret';
 
-  cancelScheduledPost,
+import { Router, Request, Response } from 'express';
+import { getMetrics } from '../services/metrics';
+import { isDbConnected } from '../config/db';
+  closeIgClient,
+  scrapeFollowersHandler,
+  getIgClientsSnapshot,
+  closeIgClient,
+} from '../client/Instagram';
+import { logAction, getActionSummary, listActionLogs, getUnifiedActionLog } from '../services/actionLog';
+import { requireAuth } from '../middleware/auth';
+import { signToken } from '../secret';
+
   listScheduledPosts,
 } from '../client/InstagramPoster';
 import {
@@ -86,12 +87,25 @@ const apiEndpoints = [
     method: 'GET',
     path: '/api/config',
     auth: false,
-    description: 'Runtime config (detailed when authenticated)',
-  },
-  { method: 'GET', path: '/api/status', auth: false, description: 'Get system status' },
-  {
-    method: 'GET',
-    path: '/api/health',
+  res.json(logs);
+});
+
+router.get('/actions/unified', async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(req.query.limit as string, 10) || 10, 100);
+  const offset = parseInt(req.query.offset as string, 10) || 0;
+
+  try {
+    const result = await getUnifiedActionLog({ limit, offset });
+    res.json(result);
+  } catch (err) {
+    console.error('Failed to fetch unified action log:', err);
+    res.status(500).json({ error: 'Failed to fetch unified action log' });
+  }
+});
+
+router.post('/actions', async (req: Request, res: Response) => {
+  const { platform, action, status, metadata } = req.body;
+  await logAction({ platform, action, status, metadata });
     auth: false,
     description: 'Health check (detailed when authenticated)',
   },
@@ -212,25 +226,12 @@ const apiEndpoints = [
   // Scraping
   {
     method: 'GET',
-  }
-});
-
-router.get('/actions/unified', authenticate, async (req, res) => {
-  try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 50, 1), 100);
-    const offset = Math.max(parseInt(req.query.offset as string, 10) || 0, 0);
-    
-    const actions = await getUnifiedActionLog({ limit, offset });
-    res.json(actions);
-  } catch (err) {
-    logger.error('Failed to get unified action log', { error: err });
-    res.status(500).json({ error: 'Failed to get unified action log' });
-  }
-});
-
-router.get('/actions/summary', authenticate, async (req, res) => {
-  try {
-    const summary = await getActionSummary();
+    path: '/api/scrape-followers',
+    auth: true,
+    description: 'Scrape followers (download)',
+    rateLimit: '2/5min',
+  },
+  {
     method: 'POST',
     path: '/api/scrape-followers',
     auth: true,
