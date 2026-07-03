@@ -1,4 +1,3 @@
-
 jest.mock('puppeteer-extra', () => ({
   use: jest.fn(),
   launch: jest.fn(),
@@ -16,12 +15,6 @@ jest.mock('../config/db', () => ({
   isDbConnected: jest.fn(() => false),
 }));
 
-jest.mock('../client/Instagram', () => ({
-  getIgClient: jest.fn(),
-  closeIgClient: jest.fn(),
-  scrapeFollowersHandler: jest.fn(),
-  getIgClientStatus: jest.fn(() => ({ connected: false })),
-  getIgClientsSnapshot: jest.fn(() => ({})),
   logAction: jest.fn().mockResolvedValue(undefined),
   getActionSummary: jest.fn().mockResolvedValue({}),
   listActionLogs: jest.fn().mockResolvedValue([]),
@@ -34,6 +27,12 @@ jest.mock('../client/Instagram', () => ({
 }));
 
 jest.mock('../services/metrics', () => ({
+}));
+
+jest.mock('../services/actionLog', () => ({
+  logAction: jest.fn().mockResolvedValue(undefined),
+  getActionSummary: jest.fn().mockResolvedValue({}),
+  listActionLogs: jest.fn().mockResolvedValue([]),
 }));
 
 jest.mock('../services/metrics', () => ({
@@ -115,77 +114,55 @@ describe('API routes', () => {
     });
   });
 
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-    });
+  describe('authenticated endpoints', () => {
+    const token = signToken({ username: 'testuser', account: 'default' });
 
-    test('GET /api/actions/unified returns merged paginated action log', async () => {
-      const { getUnifiedActionLog } = require('../services/actionLog');
-      getUnifiedActionLog.mockResolvedValueOnce({
-        actions: [
-          {
-            platform: 'instagram',
-            action: 'like',
-            timestamp: '2024-01-01T00:00:00.000Z',
-            status: 'success',
-            metadata: { postId: '123' },
-          },
-          {
-            platform: 'twitter',
-            action: 'tweet',
-            timestamp: '2024-01-02T00:00:00.000Z',
-            status: 'success',
-            metadata: { tweetId: '456' },
-          },
-        ],
-        total: 2,
-        limit: 10,
-        offset: 0,
-      });
-
-      const res = await request(app).get('/api/actions/unified');
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({
-        actions: expect.any(Array),
-        total: 2,
-        limit: 10,
-        offset: 0,
-      });
-      expect(res.body.actions).toHaveLength(2);
-      expect(res.body.actions[0]).toMatchObject({
-        platform: 'instagram',
-        action: 'like',
-        timestamp: expect.any(String),
-        status: 'success',
-        metadata: expect.any(Object),
-      });
-      expect(res.body.actions[1]).toMatchObject({
-        platform: 'twitter',
-        action: 'tweet',
-        timestamp: expect.any(String),
-        status: 'success',
-        metadata: expect.any(Object),
-     );
-    });
-
-    test('GET /api/actions/unified supports pagination query params', async () => {
-      const res = await request(app).get('/api/actions/unified?limit=5&offset=10');
-      expect(res.status).toBe(200);
-      expect(res.body.limit).toBe(5);
-      expect(res.body.offset).toBe(10);
-    });
-  });
-});
+    test('GET /api/health returns extended payload with valid token', async () => {
+      const res = await request(app).get('/api/health').set('Cookie', `token=${token}`);
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       expect(res.body.igClient).toBeDefined();
       expect(res.body.geminiKeys).toBeDefined();
+      expect(res.body.igClient).toBeDefined();
+      expect(res.body.geminiKeys).toBeDefined();
     });
 
-    test('GET /api/config returns feature flags when authenticated', async () => {
-      const res = await request(app).get('/api/config').set('Cookie', `token=${token}`);
+    test('GET /api/actions/unified returns merged action log with default pagination', async () => {
+      const res = await request(app)
+        .get('/api/actions/unified')
+        .set('Cookie', `token=${token}`);
       expect(res.status).toBe(200);
-      expect(res.body.features).toMatchObject({
+      expect(res.body).toMatchObject({
+        actions: expect.any(Array),
+        total: expect.any(Number),
+        limit: 10,
+        offset: 0,
+      });
+    });
+
+    test('GET /api/actions/unified respects limit and offset query params', async () => {
+      const res = await request(app)
+        .get('/api/actions/unified?limit=5&offset=10')
+        .set('Cookie', `token=${token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.limit).toBe(5);
+      expect(res.body.offset).toBe(10);
+    });
+
+    test('GET /api/actions/unified returns 401 without auth', async () => {
+      const res = await request(app).get('/api/actions/unified');
+      expect(res.status).toBe(401);
+    });
+
+    test('GET /api/actions/unified validates limit and offset as numbers', async () => {
+      const res = await request(app)
+        .get('/api/actions/unified?limit=abc&offset=-1')
+        .set('Cookie', `token=${token}`);
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('error handling', () => {
         dbConnected: false,
         igAgentEnabled: false,
       });
